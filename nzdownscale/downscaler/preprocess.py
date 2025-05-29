@@ -152,6 +152,10 @@ class PreprocessForDownscaling:
         # Load and preprocess base data
         if self.base == 'era5':
             self.load_era5()
+            if self.var == 'surface_pressure':
+                # Add bias field on - ERA5 is really biased for psfc
+                bias_ds = xr.open_dataset(f'/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
+
             base_raw_ds = self.preprocess_era5(coarsen_factor=era5_coarsen_factor)
         elif self.base == 'wrf':
             self.load_wrf()
@@ -251,13 +255,22 @@ class PreprocessForDownscaling:
         if self.verbose:
             print('Loading era5...')
         self.base_ds = self.process_era.load_ds(self.var, self.years)
+        if self.var == 'surface_pressure':
+            # Load surface pressure bias field
+            bias_ds = xr.open_dataset('/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
+            self.base_ds = self.base_ds['sp'] + bias_ds['predicted_bias']
         if 'expver' in self.base_ds.coords:
             self.base_ds = self.base_ds.sel(expver=1)
             self.base_ds = self.base_ds.drop('expver')
         for variable in self.context_variables:
             if variable != self.var:
                 da = self.process_era.load_ds(variable, self.years)
+                if variable == 'surface_pressure':
+                    # Load surface pressure bias field
+                    bias_ds = xr.open_dataset('/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
                 self.base_ds = xr.merge([self.base_ds, da])
+
+
         
 
     def load_wrf(self):

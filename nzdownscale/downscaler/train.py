@@ -98,11 +98,18 @@ class Train:
                               pretrained_model=None,
                               batch=False, batch_size=1, lr=5e-5, 
                               weight_decay=0, time_intervals=1, 
-                              **convnp_kwargs,):
+                              **kwargs):
+
+        patch_kwargs = kwargs['patch_kwargs']
+        convnp_kwargs = kwargs['convnp_kwargs']
+
         print('Running training sequence:')
         print('Setting up task loader')
         self.setup_task_loader(model_name=model_name, 
-                               time_intervals=time_intervals)
+                               time_intervals=time_intervals,
+                               patch_strategy=patch_kwargs['patch_strategy'],
+                               patch_size=patch_kwargs['patch_size'],
+                               num_samples_per_date=patch_kwargs['num_samples_per_date'],)
         
         print('Initialising model')
         self.initialise_model(pretrained_model=pretrained_model, 
@@ -123,6 +130,9 @@ class Train:
                           validation=False,
                           val_tasks=None, 
                           time_intervals=1,
+                          patch_strategy=None,
+                          patch_size=None,
+                          num_samples_per_date=None,
                           ):
 
         base_ds = self.base_ds
@@ -189,7 +199,7 @@ class Train:
             val_dates = [date for sublist in val_dates for date in sublist]
 
             if not validation:
-                train_tasks = self.create_tasks_era5(train_dates, context_sampling, time_intervals)
+                train_tasks = self.create_tasks_era5(train_dates, context_sampling, time_intervals, patch_strategy, patch_size, num_samples_per_date)
             val_tasks = self.create_tasks_era5(val_dates, context_sampling, time_intervals)
         
         elif self.base == 'wrf':
@@ -305,15 +315,24 @@ class Train:
             context_sampling_ = context_sampling
         return context_sampling_
 
-    def create_tasks_era5(self, dates, context_sampling, time_intervals,):
+    def create_tasks_era5(self, dates, context_sampling, time_intervals, patch_strategy=None, patch_size=None, num_samples_per_date=None):
         tasks = []
         for date in tqdm(dates[::time_intervals], desc="Loading tasks..."):
             if context_sampling[-1] == 'random':
                 context_sampling_ = context_sampling[:-1] + [np.random.rand()]
             else:
                 context_sampling_ = context_sampling
-            task = self.task_loader(date, context_sampling=context_sampling_, target_sampling="all")
-            tasks.append(task)
+            task = self.task_loader(date, 
+                                    context_sampling=context_sampling_, 
+                                    target_sampling="all",
+                                    patch_strategy=patch_strategy,
+                                    patch_size=patch_size,
+                                    num_samples_per_date=num_samples_per_date
+                                    )
+            if num_samples_per_date is None or num_samples_per_date == 1:
+                tasks.append(task)
+            else:
+                tasks.extend(task)
         return tasks
     
     def create_tasks_wrf(self, paths, context_sampling, time_intervals):
@@ -328,7 +347,8 @@ class Train:
             date = path_to_date(path)
             if context_sampling[-1] == 'random':
                 context_sampling_ = context_sampling[:-1] + [np.random.rand()]
-            
+            else:
+                context_sampling_ = context_sampling
             task = self.task_loader(date, context_sampling=context_sampling_, target_sampling="all")
             tasks.append(task)
         return tasks
@@ -557,7 +577,16 @@ class TaskLoader_SampleStations(TaskLoader):
 
         return X_c, Y_c, X_t, Y_t
 
-    def task_generation(self, date, context_sampling="all", target_sampling=None, split_frac=0.5, datewise_deterministic=False, seed_override=None):
+    def task_generation(self, 
+                        date, 
+                        context_sampling="all", 
+                        target_sampling=None, 
+                        split_frac=0.5,
+                        datewise_deterministic=False, 
+                        seed_override=None, 
+                        bbox = None, 
+                        patch_size = None,
+                        stride = None,):
         
         def check_sampling_strat(sampling_strat, set):
             if sampling_strat is None:
@@ -589,15 +618,33 @@ class TaskLoader_SampleStations(TaskLoader):
         task["Y_c"] = []
         task["X_t"] = []
         task["Y_t"] = []
+        task["bbox"] = bbox
+        task["patch_size"] = (
+            patch_size  # store patch_size and stride in task for use in stitching in prediction
+        )
+        task["stride"] = stride
 
         context_slices = [
             self.time_slice_variable(var, date, delta_t)
             for var, delta_t in zip(self.context, self.context_delta_t)
         ]
-        # target_slices = [
-        #     self.time_slice_variable(var, date, delta_t)
-        #     for var, delta_t in zip(self.target, self.target_delta_t)
-        # ]
+        target_slices = [
+            self.time_slice_variable(var, date, delta_t)
+            for var, delta_t in zip(self.target, self.target_delta_t)
+        ]
+
+        if bbox is not None:
+            assert (
+                len(bbox) == 4
+            ), "bbox must be a list of length 4 with [x1_min, x1_max, x2_min, x2_max]"
+
+            # spatial slices
+            context_slices = [
+                self.spatial_slice_variable(var, bbox) for var in context_slices
+            ]
+            target_slices = [
+                self.spatial_slice_variable(var, bbox) for var in target_slices
+            ]
 
         for i, (var, sampling_strat) in enumerate(zip(context_slices, context_sampling)):
             context_seed = seed + i if seed is not None else None

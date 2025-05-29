@@ -154,7 +154,9 @@ class ProcessWRF(DataProcess):
         # if time is not None:
         #     ds.sel(Time=time)
         if len(ds.dims) != 3:
-            raise ValueError(f'Incorrect dimensions: {ds.dims}, there should be 3 dimensions: Time, south_north, west_east')
+            # which date has the wrong dimensions
+            wrong_dims_dates = self.check_dims(ds)
+            raise ValueError(f'Incorrect dimensions: {ds.dims}, there should be 3 dimensions: Time, south_north, west_east. Dates with wrong dimensions: {wrong_dims_dates}')
         print('Loading data from dask')
         with ProgressBar():
             ds = ds.load()
@@ -176,6 +178,9 @@ class ProcessWRF(DataProcess):
             da = self.kelvin_to_celsius(da)
         return da
 
+    def check_dims(self, ds: xr.Dataset):
+        ts = [t for t in ds['Time'].values if len(ds.sel(Time=t).dims) != 3]
+        return ts
 
     def convert_hourly_to_daily(self, 
                                 ds, 

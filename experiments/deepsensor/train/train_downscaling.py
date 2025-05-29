@@ -131,6 +131,7 @@ def main():
             k: v for k, v in convnp_kwargs.items() if k != "internal_density"
         }
 
+    patch_kwargs = {'patch_strategy': "random", 'patch_size': 0.2, 'num_samples_per_date': 2}
     remove_stations = args['remove_stations']
 
     # ------------------------------------------
@@ -192,7 +193,7 @@ def main():
     # ------------------------------------------
     # Train model
     # ------------------------------------------
-    use_gpu = True
+    use_gpu = False
     training = Train(processed_output_dict=processed_output_dict,
                      base=base, use_gpu=use_gpu)
     if not use_gpu:
@@ -200,13 +201,16 @@ def main():
     else:
         print('USING GPU')
 
+    kwargs = {'patch_kwargs': patch_kwargs,
+             'convnp_kwargs': convnp_kwargs,}
+
     training.run_training_sequence(n_epochs, model_name, 
                                    pretrained_model=pretrained_model,
                                    batch=batch, 
                                    batch_size=batch_size, lr=lr,
                                    weight_decay=weight_decay, 
                                    time_intervals=time_intervals,
-                                   **convnp_kwargs)
+                                   **kwargs,)
     training.model.save(model_dir)
 
 if __name__ == "__main__":
