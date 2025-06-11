@@ -152,10 +152,6 @@ class PreprocessForDownscaling:
         # Load and preprocess base data
         if self.base == 'era5':
             self.load_era5()
-            if self.var == 'surface_pressure':
-                # Add bias field on - ERA5 is really biased for psfc
-                bias_ds = xr.open_dataset(f'/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
-
             base_raw_ds = self.preprocess_era5(coarsen_factor=era5_coarsen_factor)
         elif self.base == 'wrf':
             self.load_wrf()
@@ -221,8 +217,8 @@ class PreprocessForDownscaling:
             self.base_ds = self.add_time_of_year(self.base_ds)
 
         # Apply data processor to station_df
-        station_raw_df = station_raw_df.rename({station_raw_df.columns[0]: f'{self.var}_station'}, axis=1)
-        station_raw_df = station_raw_df.drop(columns=['station_name'])
+        station_raw_df = station_raw_df.rename({station_raw_df.columns[0]: f'{self.var}_station'}, axis=1).reset_index()
+        station_raw_df = station_raw_df.drop(columns=['station_name']).set_index(['time', 'latitude', 'longitude'])
         station_column_name = station_raw_df.columns[0]
         station_method = self.data_processor.config[station_column_name]['method']
 
@@ -243,6 +239,12 @@ class PreprocessForDownscaling:
         if self.verbose:
             print('Loading topography...')
         self.ds_elev = self.process_top.open_ds()
+        
+        #Load base topo for surface -> sea level pressure conversion
+        if self.base == 'wrf':
+            NotImplementedError("Add topography filepath for WRF")
+        self.base_elev = self.process_top.open_ds(DATA_PATHS[self.base]['topography'])
+
         if self.area is not None:
             minlon = PLOT_EXTENT[self.area]['minlon']
             maxlon = PLOT_EXTENT[self.area]['maxlon']
@@ -255,22 +257,13 @@ class PreprocessForDownscaling:
         if self.verbose:
             print('Loading era5...')
         self.base_ds = self.process_era.load_ds(self.var, self.years)
-        if self.var == 'surface_pressure':
-            # Load surface pressure bias field
-            bias_ds = xr.open_dataset('/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
-            self.base_ds = self.base_ds['sp'] + bias_ds['predicted_bias']
         if 'expver' in self.base_ds.coords:
             self.base_ds = self.base_ds.sel(expver=1)
             self.base_ds = self.base_ds.drop('expver')
         for variable in self.context_variables:
             if variable != self.var:
                 da = self.process_era.load_ds(variable, self.years)
-                if variable == 'surface_pressure':
-                    # Load surface pressure bias field
-                    bias_ds = xr.open_dataset('/nesi/project/nesi03947/deepsensor/deepweather-downscaling/experiments/data_explore/by_variable/surface_pressure_bias_field.nc')
                 self.base_ds = xr.merge([self.base_ds, da])
-
-
         
 
     def load_wrf(self):
@@ -352,11 +345,23 @@ class PreprocessForDownscaling:
         assert self.base_ds is not None, "Run load_era5() first"
         assert self.highres_aux_raw_ds is not None, "Run preprocess_topography() first"
 
+
         # Convert hourly to daily data
         if self.use_daily_data:
             ds_era = self._convert_era5_to_daily(self.base_ds)
         else:
             ds_era = self.base_ds
+
+        # Convert surface pressure to sea level pressure
+        # We could put in the actual temperature values here, but haven't configured that for stations
+        # So for now we just use a constant temperature of 288.15 K
+        print('Converting era5 surface pressure to sea level pressure...')
+        data_var_order = list(ds_era.data_vars)
+        ds_era['slp'] = self.process_era.surface_to_sea_level_pressure(ds_era['sp'], self.base_elev['elevation'])
+        ds_era = self.base_ds.drop('sp')
+        # Ensure the variables are in the correct order
+        data_var_order = ['slp' if v == 'sp' else v for v in data_var_order]
+        ds_era = ds_era[data_var_order]
 
         # Coarsen
         self.era5_coarsen_factor = coarsen_factor
@@ -376,6 +381,12 @@ class PreprocessForDownscaling:
         
         self.station_metadata = self._filter_stations(self.station_metadata_all, remove_stations=remove_stations)
         self.station_raw_df = self._get_station_raw_df(self.station_metadata, fill_missing=fill_missing)
+
+        # Convert surface pressure to sea level pressure
+        if self.var == 'surface_pressure':
+            self.station_raw_df = self.process_stations.surface_to_sea_level_pressure(
+                self.station_raw_df, 
+            )
         
         return self.station_raw_df 
         
@@ -815,8 +826,8 @@ class PreprocessForDownscaling:
             #         self.transform_params['skewnorm_grid'] = self.calculate_skewnorm_params(subset_base_raw_ds[var])
 
         # STATION DF NORMALISATION
-        station_raw_df = station_raw_df.rename({station_raw_df.columns[0]: f'{self.var}_station'}, axis=1)
-        station_raw_df = station_raw_df.drop(columns=['station_name'])
+        station_raw_df = station_raw_df.rename({station_raw_df.columns[0]: f'{self.var}_station'}, axis=1).reset_index()
+        station_raw_df = station_raw_df.drop(columns=['station_name']).set_index(['time', 'latitude', 'longitude'])
 
         method = NORMALISATION[self.var]
         station_df = data_processor(station_raw_df, method=method)

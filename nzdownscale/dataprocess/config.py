@@ -95,7 +95,7 @@ VAR_TO_STD = {
     'era5':
         {'t2m': 'temperature',
         'precipitation': 'precipitation',
-        'sp': 'surface_pressure',
+        'slp': 'surface_pressure',
         'u10': '10m_u_component_of_wind',
         'v10': '10m_v_component_of_wind',
         'ssr': 'surface_net_solar_radiation',

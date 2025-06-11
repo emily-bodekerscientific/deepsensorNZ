@@ -1,7 +1,8 @@
 import os
-from typing import Literal, List
+from typing import Literal, List, Union
 import glob
 import pandas as pd
+import numpy as np
 import xarray as xr
 from datetime import datetime
 
@@ -140,7 +141,75 @@ class ProcessERA5(DataProcess):
 
     def kelvin_to_celsius(self, da: xr.DataArray):
         return da - 273.15
-    
+
+    def surface_to_sea_level_pressure(
+        self,
+        da: xr.DataArray,
+        elevation: xr.DataArray,
+        temperature: Union[xr.DataArray, float, None] = None,
+    ) -> xr.DataArray:
+        """
+        Convert surface pressure (Pa) to sea-level pressure (Pa) via hypsometric equation.
+
+        Parameters
+        ----------
+        da : xr.DataArray
+            The surface pressure field, in Pascal (Pa).
+            Expected dims: (“time”, “latitude”, “longitude”).
+        elevation : xr.DataArray
+            Elevation in meters (m).  Expected dims: (“latitude”, “longitude”).
+            Must cover at least the same lat/lon grid as `da`.
+        temperature : float or xr.DataArray, optional
+            If float, a single isothermal value in Kelvin (default 288 K).
+            If xr.DataArray, must have a “time” dimension matching `da.time`.
+
+        Returns
+        -------
+        p_slp : xr.DataArray
+            Sea-level pressure, in Pascal (Pa), dims (“time”, “latitude”, “longitude”).
+
+        Notes
+        -----
+        Hypsometric equation: 
+            p_slp = p_surface * exp( g * h / (R_d * T) )
+        where
+        - p_surface in Pa
+        - g = 9.80665 m/s²
+        - R_d = 287.05 J/(kg·K)
+        - h = elevation in meters
+        - T = temperature in Kelvin
+        """
+        # 1) Default T = 288 K if not provided
+        if temperature is None:
+            temperature = 288.0
+
+        # 2) Constants
+        R_d = 287.05      # J/(kg·K) (gas constant for dry air)
+        g   = 9.80665     # m/s²         (gravitational acceleration)
+
+        # 3) Reindex elevation onto the EXACT lat/lon coords of da
+        elevation = elevation.reindex(
+            {'latitude': da.latitude, 'longitude': da.longitude},
+            method='nearest'
+        )
+
+        # 4) Compute the exponent: exp( g * h / (R_d * T) ).
+        #    If temperature is a float, (g * elevation)/(R_d * temperature) has dims (lat, lon).
+        #    If temperature is a DataArray with dim “time”, Xarray will automatically align 
+        #    on “time” and broadcast elevation up to (time, lat, lon) behind the scenes.
+        exponent = (g * elevation) / (R_d * temperature)
+        exp_term = np.exp(exponent)
+
+        # 5) If exp_term has no “time” dimension, give it the same time coords as da:
+        if 'time' not in exp_term.dims:
+            exp_term = exp_term.expand_dims(time=da.time)
+
+        # 6) Element‐wise multiply:  da(time,lat,lon) * exp_term(time,lat,lon)
+        p_slp = da * exp_term
+
+        # 7) Return in Pa:
+        return p_slp
+
 import xesmf as xe
 def interpolate_era5(era5, ds, var):
     "Interpolate ERA5 to match the resolution of ds"

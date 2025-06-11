@@ -205,12 +205,12 @@ class ProcessStations(DataProcess):
     def get_all_station_info(self):
         station_info_master = {}
         for var in VARIABLE_OPTIONS:
-            print(f'Getting {var} station info')
+            # print(f'Getting {var} station info')
             station_info = self.get_station_info(var)
             for k, v in station_info.items():
                 if k not in station_info_master:
                     station_info_master[k] = v
-            print('Number of stations:', len(station_info_master))
+            # print('Number of stations:', len(station_info_master))
         return station_info_master
     
     def load_stations_time(self, 
@@ -327,5 +327,32 @@ class ProcessStations(DataProcess):
                                             'longitude']).sort_index()
 
         return station_df
+
+    def surface_to_sea_level_pressure(
+        self,
+        df: pd.DataFrame,
+        ) -> xr.DataArray:
+        """ Convert surface pressure to sea level pressure """
+        
+        # Add elevation to the DataFrame
+        station_df = df.reset_index()
+        station_info = self.get_all_station_info()
+        station_df['elevation'] = station_df['station_name'].apply(lambda x: station_info[x]['elevation'])
+
+        # Constants
+        if 'temperature' not in station_df.columns:
+            station_df['temperature'] = 288.0 # Default temperature in Kelvin, same adjustment as ERA5
+
+        g = 9.80665  # Gravitational acceleration in m/s^2
+        R = 287.05 # Specific gas constant for dry air in J/(kg·K)
+
+        # Calculate sea level pressure using the hypsometric equation
+        exponent = g * station_df['elevation'] / (R * station_df['temperature'])
+        exp_term = np.exp(exponent)
+
+        station_df['slp'] = station_df['stn_lev_pres'] * exp_term
+
+        return station_df[['time', 'latitude', 'longitude', 'station_name', 'slp']].set_index(['time', 'station_name', 'latitude', 'longitude'])
+
 if __name__ == '__main__':
     pass
